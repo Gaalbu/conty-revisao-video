@@ -118,8 +118,8 @@ export function addVersion(
 export function addComment(db: DatabaseSync, versionId: string, input: Record<string, unknown>, now: Date): Outcome {
   if (!findVersion(db, versionId)) return notFound("versão");
   const second = input.at_second;
-  if (typeof second !== "number" || !Number.isInteger(second) || second < 0) {
-    return { status: 400, body: { error: "at_second deve ser inteiro maior ou igual a 0" } };
+  if (typeof second !== "number" || !Number.isSafeInteger(second) || second < 0) {
+    return { status: 400, body: { error: "at_second deve ser inteiro seguro maior ou igual a 0" } };
   }
   const body = typeof input.body === "string" ? input.body.trim() : "";
   if (!body) return { status: 400, body: { error: "comentário vazio" } };
