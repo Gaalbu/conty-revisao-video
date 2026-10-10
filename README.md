@@ -12,7 +12,8 @@ Comece a leitura por [`src/rules.ts`](src/rules.ts): `pendingRequired(required, 
 - Versão nova nasce `pending` e vira a atual. A anterior fica, com os comentários dela. Comentário não é copiado. Se a entrega estava `approved`, volta para `in_production`.
 - Aprovar uma versão que não é a atual → 409.
 - Aprovar a entrega com peça exigida pendente → `409 {"error":"peça obrigatória sem versão aprovada","pending":[...]}`. Sem pendência → `approved`.
-- Comentário: `at_second` inteiro `>= 0` e `body`.
+- Comentário: `at_second` inteiro seguro `>= 0` e `body`. Acima do inteiro seguro → 400, sem gravar.
+- Versão nova, aprovação de versão e aprovação de entrega leem e gravam sob `BEGIN IMMEDIATE`: o número da versão e a lista de pendentes não mudam no meio, nem com outro processo no mesmo arquivo.
 
 ## API
 
@@ -86,8 +87,8 @@ Transcodificação e mais de um revisor.
 
 Comece por `src/rules.ts`. A aprovação da entrega é uma função só, `pendingRequired`: pega as peças que a campanha exige e devolve as que não têm a versão atual aprovada. Se a lista não for vazia, a entrega volta 409 com `pending`, então a marca vê o que falta (`["cover"]`) em vez de um erro genérico. Peça não exigida não trava: campanha só de vídeo aprova com roteiro pendente. Versão nova nasce pendente, vira a atual, não herda comentário e devolve a entrega aprovada para `in_production`; aprovar a versão antiga depois disso é 409. Comentário fica preso à versão, com o segundo do vídeo.
 
-Testes: `npm test` com 7 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste da capa faltando.
+Testes: `npm test` com 8 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste da capa faltando.
 
 Ficou de fora: transcodificação e mais de um revisor.
 
-IA: código, testes e README escritos com assistente de código (Claude Code), a partir de um plano com as regras do desafio. O assistente rodou os testes e o typecheck e colou a resposta real acima.
+IA: código, testes e README escritos com assistente de código (Claude Code), a partir de um plano com as regras do desafio. A correção do segundo inseguro veio de programação em pares: o Codex auditou a entrega e reproduziu o 500; o Claude Code escreveu o teste, corrigiu e publicou.

@@ -20,8 +20,11 @@ type CommentRow = { id: string; version_id: string; at_second: number; body: str
 
 const notFound = (what: string): Outcome => ({ status: 404, body: { error: `${what} não encontrada` } });
 
+// BEGIN IMMEDIATE pega o lock de escrita antes de ler: o número da versão nova e
+// a lista de peças pendentes não mudam entre a leitura e a gravação, nem quando
+// outro processo escreve no mesmo arquivo.
 function transaction<T>(db: DatabaseSync, work: () => T): T {
-  db.exec("BEGIN");
+  db.exec("BEGIN IMMEDIATE");
   try {
     const result = work();
     db.exec("COMMIT");
@@ -118,8 +121,8 @@ export function addVersion(
 export function addComment(db: DatabaseSync, versionId: string, input: Record<string, unknown>, now: Date): Outcome {
   if (!findVersion(db, versionId)) return notFound("versão");
   const second = input.at_second;
-  if (typeof second !== "number" || !Number.isInteger(second) || second < 0) {
-    return { status: 400, body: { error: "at_second deve ser inteiro maior ou igual a 0" } };
+  if (typeof second !== "number" || !Number.isSafeInteger(second) || second < 0) {
+    return { status: 400, body: { error: "at_second deve ser inteiro seguro maior ou igual a 0" } };
   }
   const body = typeof input.body === "string" ? input.body.trim() : "";
   if (!body) return { status: 400, body: { error: "comentário vazio" } };
@@ -134,29 +137,33 @@ export function addComment(db: DatabaseSync, versionId: string, input: Record<st
 }
 
 export function approveVersion(db: DatabaseSync, versionId: string, now: Date): Outcome {
-  const version = findVersion(db, versionId);
-  if (!version) return notFound("versão");
-  const current = currentVersions(db, version.delivery_id)[version.kind];
-  if (current?.id !== version.id) {
-    return { status: 409, body: { error: "só a versão atual da peça pode ser aprovada" } };
-  }
-  if (version.status !== "approved") {
-    db.prepare("UPDATE versions SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), versionId);
-  }
-  return { status: 200, body: readVersion(db, versionId) };
+  return transaction(db, (): Outcome => {
+    const version = findVersion(db, versionId);
+    if (!version) return notFound("versão");
+    const current = currentVersions(db, version.delivery_id)[version.kind];
+    if (current?.id !== version.id) {
+      return { status: 409, body: { error: "só a versão atual da peça pode ser aprovada" } };
+    }
+    if (version.status !== "approved") {
+      db.prepare("UPDATE versions SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), versionId);
+    }
+    return { status: 200, body: readVersion(db, versionId) };
+  });
 }
 
 export function approveDelivery(db: DatabaseSync, deliveryId: string, now: Date): Outcome {
-  const delivery = findDelivery(db, deliveryId);
-  if (!delivery) return notFound("entrega");
-  const pending = pendingRequired(requiredOf(db, delivery.campaign_id), currentVersions(db, deliveryId));
-  if (pending.length > 0) {
-    return { status: 409, body: { error: "peça obrigatória sem versão aprovada", pending } };
-  }
-  if (delivery.status !== "approved") {
-    db.prepare("UPDATE deliveries SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), deliveryId);
-  }
-  return { status: 200, body: readDelivery(db, deliveryId) };
+  return transaction(db, (): Outcome => {
+    const delivery = findDelivery(db, deliveryId);
+    if (!delivery) return notFound("entrega");
+    const pending = pendingRequired(requiredOf(db, delivery.campaign_id), currentVersions(db, deliveryId));
+    if (pending.length > 0) {
+      return { status: 409, body: { error: "peça obrigatória sem versão aprovada", pending } };
+    }
+    if (delivery.status !== "approved") {
+      db.prepare("UPDATE deliveries SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), deliveryId);
+    }
+    return { status: 200, body: readDelivery(db, deliveryId) };
+  });
 }
 
 export function readVersion(db: DatabaseSync, versionId: string) {
