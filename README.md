@@ -13,6 +13,11 @@ Comece a leitura por [`src/rules.ts`](src/rules.ts): `pendingRequired(required, 
 - Aprovar uma versão que não é a atual → 409.
 - Aprovar a entrega com peça exigida pendente → `409 {"error":"peça obrigatória sem versão aprovada","pending":[...]}`. Sem pendência → `approved`.
 - Comentário: `at_second` inteiro seguro `>= 0` e `body`. Acima do inteiro seguro → 400, sem gravar.
+- Duração: a versão de vídeo aceita `duration_seconds` (inteiro positivo, opcional). Quando vem, o comentário precisa ter `at_second` até essa duração, a da versão comentada e não a da atual; além dela → 422. Em outra peça → 400.
+- Pedido de alteração: `POST /versions/:id/change-requests {"note": "..."}` só na versão atual e não aprovada. A versão fica `changes_requested`, não pode ser aprovada, e a resposta do criador é uma versão nova. Repetir o mesmo pedido é idempotente; outro pedido na mesma versão → 409.
+- `GET /deliveries/:id` traz `pending_detail` com o motivo de cada peça pendente: `sem_versao`, `aguardando_revisao` ou `alteracao_pedida`. O 409 da aprovação mantém o corpo do contrato.
+- Entrada: corpo precisa ser `application/json` (415), JSON válido (400), objeto, só com os campos da rota (campo desconhecido → 400 com o nome) e até 64 KB (413).
+- Concorrência: `busy_timeout` e WAL; seis threads enviando versão na mesma peça recebem números 1 a 6, sem `database is locked`.
 - Versão nova, aprovação de versão e aprovação de entrega leem e gravam sob `BEGIN IMMEDIATE`: o número da versão e a lista de pendentes não mudam no meio, nem com outro processo no mesmo arquivo.
 
 ## API
@@ -22,6 +27,7 @@ POST /campaigns                              {"required":["video","cover"]}
 POST /deliveries                             {"campaign_id":"..."}
 POST /deliveries/:id/pieces/:kind/versions   {"url":"https://cdn.exemplo/v1.mp4"}
 POST /versions/:id/comments                  {"at_second":12,"body":"corta o logo"}
+POST /versions/:id/change-requests          {"note":"trocar a trilha"}
 POST /versions/:id/approval
 POST /deliveries/:id/approval
 GET  /deliveries/:id
@@ -87,7 +93,7 @@ Transcodificação e mais de um revisor.
 
 Comece por `src/rules.ts`. A aprovação da entrega é uma função só, `pendingRequired`: pega as peças que a campanha exige e devolve as que não têm a versão atual aprovada. Se a lista não for vazia, a entrega volta 409 com `pending`, então a marca vê o que falta (`["cover"]`) em vez de um erro genérico. Peça não exigida não trava: campanha só de vídeo aprova com roteiro pendente. Versão nova nasce pendente, vira a atual, não herda comentário e devolve a entrega aprovada para `in_production`; aprovar a versão antiga depois disso é 409. Comentário fica preso à versão, com o segundo do vídeo.
 
-Testes: `npm test` com 8 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste da capa faltando.
+Testes: `npm test` com 26 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste da capa faltando.
 
 Ficou de fora: transcodificação e mais de um revisor.
 
