@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { KINDS, parseKinds, pendingRequired } from "./rules.ts";
+import { describePending, KINDS, parseKinds, pendingRequired } from "./rules.ts";
 import type { Kind, VersionStatus } from "./rules.ts";
 
 export type Outcome = { status: 200 | 201 | 400 | 404 | 409; body: unknown };
@@ -39,8 +39,16 @@ function findDelivery(db: DatabaseSync, id: string) {
   return db.prepare("SELECT * FROM deliveries WHERE id = ?").get(id) as DeliveryRow | undefined;
 }
 
+// Status efetivo: aprovada vence; senão, pedido de alteração registrado; senão pendente.
+const VERSION_COLUMNS = `v.id, v.delivery_id, v.kind, v.number, v.url, v.created_at, v.approved_at,
+  CASE WHEN v.status = 'approved' THEN 'approved'
+       WHEN cr.version_id IS NOT NULL THEN 'changes_requested'
+       ELSE 'pending' END AS status`;
+
 function findVersion(db: DatabaseSync, id: string) {
-  return db.prepare("SELECT * FROM versions WHERE id = ?").get(id) as VersionRow | undefined;
+  return db
+    .prepare(`SELECT ${VERSION_COLUMNS} FROM versions v LEFT JOIN change_requests cr ON cr.version_id = v.id WHERE v.id = ?`)
+    .get(id) as VersionRow | undefined;
 }
 
 function requiredOf(db: DatabaseSync, campaignId: string): Kind[] {
@@ -53,7 +61,8 @@ function requiredOf(db: DatabaseSync, campaignId: string): Kind[] {
 function currentVersions(db: DatabaseSync, deliveryId: string): Partial<Record<Kind, VersionRow>> {
   const rows = db
     .prepare(
-      `SELECT v.* FROM versions v
+      `SELECT ${VERSION_COLUMNS} FROM versions v
+       LEFT JOIN change_requests cr ON cr.version_id = v.id
        WHERE v.delivery_id = ?
          AND v.number = (SELECT MAX(number) FROM versions WHERE delivery_id = v.delivery_id AND kind = v.kind)`,
     )
@@ -144,10 +153,40 @@ export function approveVersion(db: DatabaseSync, versionId: string, now: Date): 
     if (current?.id !== version.id) {
       return { status: 409, body: { error: "só a versão atual da peça pode ser aprovada" } };
     }
+    if (version.status === "changes_requested") {
+      return { status: 409, body: { error: "versão com alteração pedida: envie uma versão nova" } };
+    }
     if (version.status !== "approved") {
       db.prepare("UPDATE versions SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), versionId);
     }
     return { status: 200, body: readVersion(db, versionId) };
+  });
+}
+
+// A marca pede alteração na versão atual, ainda não aprovada. A versão fica
+// bloqueada para aprovação; a resposta do criador é uma versão nova.
+export function requestChanges(db: DatabaseSync, versionId: string, input: Record<string, unknown>, now: Date): Outcome {
+  return transaction(db, (): Outcome => {
+    const version = findVersion(db, versionId);
+    if (!version) return notFound("versão");
+    const note = typeof input.note === "string" ? input.note.trim() : "";
+    if (!note) return { status: 400, body: { error: "nota do pedido de alteração é obrigatória" } };
+    const current = currentVersions(db, version.delivery_id)[version.kind];
+    if (current?.id !== version.id) return { status: 409, body: { error: "só a versão atual pode receber pedido de alteração" } };
+    if (version.status === "approved") return { status: 409, body: { error: "versão aprovada não recebe pedido de alteração" } };
+    const existing = db.prepare("SELECT note FROM change_requests WHERE version_id = ?").get(versionId) as
+      | { note: string }
+      | undefined;
+    if (existing) {
+      if (existing.note !== note) return { status: 409, body: { error: "versão já tem outro pedido de alteração" } };
+      return { status: 200, body: readVersion(db, versionId) };
+    }
+    db.prepare("INSERT INTO change_requests (version_id, note, requested_at) VALUES (?, ?, ?)").run(
+      versionId,
+      note,
+      now.toISOString(),
+    );
+    return { status: 201, body: readVersion(db, versionId) };
   });
 }
 
@@ -173,6 +212,9 @@ export function readVersion(db: DatabaseSync, versionId: string) {
     .prepare("SELECT * FROM comments WHERE version_id = ? ORDER BY at_second ASC, created_at ASC, id ASC")
     .all(versionId) as CommentRow[];
   const current = currentVersions(db, version.delivery_id)[version.kind];
+  const changeRequest = db.prepare("SELECT note, requested_at FROM change_requests WHERE version_id = ?").get(versionId) as
+    | { note: string; requested_at: string }
+    | undefined;
   return {
     id: version.id,
     delivery_id: version.delivery_id,
@@ -181,6 +223,7 @@ export function readVersion(db: DatabaseSync, versionId: string) {
     url: version.url,
     status: version.status,
     current: current?.id === version.id,
+    change_request: changeRequest ?? null,
     comments: comments.map((c) => ({ id: c.id, at_second: c.at_second, body: c.body })),
   };
 }
@@ -191,7 +234,10 @@ export function readDelivery(db: DatabaseSync, deliveryId: string) {
   const required = requiredOf(db, delivery.campaign_id);
   const current = currentVersions(db, deliveryId);
   const versions = db
-    .prepare("SELECT * FROM versions WHERE delivery_id = ? ORDER BY kind ASC, number ASC")
+    .prepare(
+      `SELECT ${VERSION_COLUMNS} FROM versions v LEFT JOIN change_requests cr ON cr.version_id = v.id
+       WHERE v.delivery_id = ? ORDER BY v.kind ASC, v.number ASC`,
+    )
     .all(deliveryId) as VersionRow[];
 
   const pieces: Partial<Record<Kind, unknown>> = {};
@@ -210,6 +256,8 @@ export function readDelivery(db: DatabaseSync, deliveryId: string) {
     status: delivery.status,
     required,
     pending: pendingRequired(required, current),
+    // O motivo de cada pendência fica no GET; o 409 da aprovação mantém o corpo do contrato.
+    pending_detail: describePending(required, current),
     pieces,
   };
 }

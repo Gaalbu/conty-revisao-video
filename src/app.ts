@@ -11,6 +11,7 @@ import {
   createDelivery,
   readDelivery,
   readVersion,
+  requestChanges,
 } from "./review.ts";
 import type { Outcome } from "./review.ts";
 
@@ -64,6 +65,10 @@ export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) 
   app.post("/versions/:id/comments", async (c) => {
     const body = await readBody(c, ["at_second", "body"]);
     return body.ok ? reply(c, addComment(db, c.req.param("id"), body.value, now())) : body.response;
+  });
+  app.post("/versions/:id/change-requests", async (c) => {
+    const body = await readBody(c, ["note"]);
+    return body.ok ? reply(c, requestChanges(db, c.req.param("id"), body.value, now())) : body.response;
   });
   app.post("/versions/:id/approval", async (c) => {
     const body = await readBody(c, []);

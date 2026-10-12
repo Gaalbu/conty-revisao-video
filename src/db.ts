@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS versions (
   UNIQUE (delivery_id, kind, number)
 );
 
+-- Pedido de alteração da marca numa versão. Fica numa tabela própria para não
+-- mexer no CHECK de status de bancos já criados; o status efetivo é derivado.
+CREATE TABLE IF NOT EXISTS change_requests (
+  version_id TEXT PRIMARY KEY REFERENCES versions(id),
+  note TEXT NOT NULL,
+  requested_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   version_id TEXT NOT NULL REFERENCES versions(id),
