@@ -88,5 +88,7 @@ export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) 
     return version ? c.json(version) : c.json({ error: "versão não encontrada" }, 404);
   });
 
+  app.notFound((c) => c.json({ error: "rota não encontrada" }, 404));
+
   return app;
 }

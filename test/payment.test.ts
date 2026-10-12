@@ -59,4 +59,10 @@ describe("pagamento e histórico da aprovação", () => {
     expect(d.approval_history.map((e) => e.event)).toEqual(["approved"]);
     expect(d).toMatchObject({ status: "approved", payment: "liberado" });
   });
+
+  it("rota inexistente responde 404 em JSON", async () => {
+    const res = await app.request("/nao-existe");
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "rota não encontrada" });
+  });
 });
