@@ -132,7 +132,12 @@ export function addVersion(
       `INSERT INTO versions (id, delivery_id, kind, number, url, duration_seconds, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
     ).run(id, deliveryId, kind, Number(last.n) + 1, url, (duration as number | undefined) ?? null, now.toISOString());
-    db.prepare("UPDATE deliveries SET status = 'in_production', approved_at = NULL WHERE id = ?").run(deliveryId);
+    // Versão nova numa peça exigida desfaz a aprovação; peça que a campanha não
+    // pediu não bloqueia, então também não desfaz.
+    const current = findDelivery(db, deliveryId)!;
+    if (current.status === "approved" && requiredOf(db, current.campaign_id).includes(kind)) {
+      db.prepare("UPDATE deliveries SET status = 'in_production', approved_at = NULL WHERE id = ?").run(deliveryId);
+    }
   });
   return { status: 201, body: readVersion(db, id) };
 }
