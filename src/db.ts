@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS change_requests (
   requested_at TEXT NOT NULL
 );
 
+-- Histórico da aprovação da entrega: aprovada e desfeita por versão nova. Só cresce.
+CREATE TABLE IF NOT EXISTS approval_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  delivery_id TEXT NOT NULL REFERENCES deliveries(id),
+  event TEXT NOT NULL CHECK (event IN ('approved', 'invalidated')),
+  at TEXT NOT NULL,
+  version_id TEXT REFERENCES versions(id)
+);
+
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   version_id TEXT NOT NULL REFERENCES versions(id),
