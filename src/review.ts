@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { describePending, KINDS, parseKinds, pendingRequired } from "./rules.ts";
 import type { Kind, VersionStatus } from "./rules.ts";
 
-export type Outcome = { status: 200 | 201 | 400 | 404 | 409; body: unknown };
+export type Outcome = { status: 200 | 201 | 400 | 404 | 409 | 422; body: unknown };
 
 type DeliveryRow = { id: string; campaign_id: string; status: "in_production" | "approved"; approved_at: string | null };
 type VersionRow = {
@@ -12,6 +12,7 @@ type VersionRow = {
   kind: Kind;
   number: number;
   url: string;
+  duration_seconds: number | null;
   status: VersionStatus;
   created_at: string;
   approved_at: string | null;
@@ -40,7 +41,7 @@ function findDelivery(db: DatabaseSync, id: string) {
 }
 
 // Status efetivo: aprovada vence; senão, pedido de alteração registrado; senão pendente.
-const VERSION_COLUMNS = `v.id, v.delivery_id, v.kind, v.number, v.url, v.created_at, v.approved_at,
+const VERSION_COLUMNS = `v.id, v.delivery_id, v.kind, v.number, v.url, v.duration_seconds, v.created_at, v.approved_at,
   CASE WHEN v.status = 'approved' THEN 'approved'
        WHEN cr.version_id IS NOT NULL THEN 'changes_requested'
        ELSE 'pending' END AS status`;
@@ -113,6 +114,14 @@ export function addVersion(
   if (!kind) return { status: 400, body: { error: `peça desconhecida: use ${KINDS.join(", ")}` } };
   if (!isHttpUrl(input.url)) return { status: 400, body: { error: "url inválida" } };
   const url = input.url;
+  // Duração é opcional e só faz sentido em vídeo; quando vem, limita os comentários.
+  const duration = input.duration_seconds;
+  if (duration !== undefined) {
+    if (kind !== "video") return { status: 400, body: { error: "duration_seconds só vale para vídeo" } };
+    if (typeof duration !== "number" || !Number.isSafeInteger(duration) || duration <= 0) {
+      return { status: 400, body: { error: "duration_seconds deve ser inteiro positivo" } };
+    }
+  }
 
   const id = `ver_${randomUUID()}`;
   transaction(db, () => {
@@ -120,18 +129,27 @@ export function addVersion(
       .prepare("SELECT COALESCE(MAX(number), 0) AS n FROM versions WHERE delivery_id = ? AND kind = ?")
       .get(deliveryId, kind) as { n: number | bigint };
     db.prepare(
-      "INSERT INTO versions (id, delivery_id, kind, number, url, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-    ).run(id, deliveryId, kind, Number(last.n) + 1, url, now.toISOString());
+      `INSERT INTO versions (id, delivery_id, kind, number, url, duration_seconds, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+    ).run(id, deliveryId, kind, Number(last.n) + 1, url, (duration as number | undefined) ?? null, now.toISOString());
     db.prepare("UPDATE deliveries SET status = 'in_production', approved_at = NULL WHERE id = ?").run(deliveryId);
   });
   return { status: 201, body: readVersion(db, id) };
 }
 
 export function addComment(db: DatabaseSync, versionId: string, input: Record<string, unknown>, now: Date): Outcome {
-  if (!findVersion(db, versionId)) return notFound("versão");
+  const version = findVersion(db, versionId);
+  if (!version) return notFound("versão");
   const second = input.at_second;
   if (typeof second !== "number" || !Number.isSafeInteger(second) || second < 0) {
     return { status: 400, body: { error: "at_second deve ser inteiro seguro maior ou igual a 0" } };
+  }
+  // O formato errado é 400; passar da duração da versão comentada é regra, 422.
+  if (version.duration_seconds !== null && second > version.duration_seconds) {
+    return {
+      status: 422,
+      body: { error: "at_second além da duração da versão", duration_seconds: version.duration_seconds },
+    };
   }
   const body = typeof input.body === "string" ? input.body.trim() : "";
   if (!body) return { status: 400, body: { error: "comentário vazio" } };
@@ -221,6 +239,7 @@ export function readVersion(db: DatabaseSync, versionId: string) {
     kind: version.kind,
     number: version.number,
     url: version.url,
+    duration_seconds: version.duration_seconds,
     status: version.status,
     current: current?.id === version.id,
     change_request: changeRequest ?? null,

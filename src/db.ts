@@ -46,5 +46,15 @@ export function openDatabase(path = ":memory:"): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(SCHEMA);
+  addMissingColumns(db);
   return db;
+}
+
+// Colunas que chegaram depois da primeira versão do schema: bancos já criados
+// ganham a coluna, nula, sem perder dados.
+function addMissingColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(versions)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "duration_seconds")) {
+    db.exec("ALTER TABLE versions ADD COLUMN duration_seconds INTEGER CHECK (duration_seconds > 0)");
+  }
 }

@@ -59,7 +59,7 @@ export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) 
     return body.ok ? reply(c, createDelivery(db, body.value)) : body.response;
   });
   app.post("/deliveries/:id/pieces/:kind/versions", async (c) => {
-    const body = await readBody(c, ["url"]);
+    const body = await readBody(c, ["url", "duration_seconds"]);
     return body.ok ? reply(c, addVersion(db, c.req.param("id"), c.req.param("kind"), body.value, now())) : body.response;
   });
   app.post("/versions/:id/comments", async (c) => {
