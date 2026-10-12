@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS comments (
 export function openDatabase(path = ":memory:"): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON");
+  // Outra conexão no mesmo arquivo espera o lock de escrita em vez de falhar com
+  // "database is locked"; WAL deixa a leitura correr durante a escrita.
+  db.exec("PRAGMA busy_timeout = 5000");
+  if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(SCHEMA);
   addMissingColumns(db);
   return db;
