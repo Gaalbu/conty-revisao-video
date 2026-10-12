@@ -137,6 +137,11 @@ export function addVersion(
     const current = findDelivery(db, deliveryId)!;
     if (current.status === "approved" && requiredOf(db, current.campaign_id).includes(kind)) {
       db.prepare("UPDATE deliveries SET status = 'in_production', approved_at = NULL WHERE id = ?").run(deliveryId);
+      db.prepare("INSERT INTO approval_events (delivery_id, event, at, version_id) VALUES (?, 'invalidated', ?, ?)").run(
+        deliveryId,
+        now.toISOString(),
+        id,
+      );
     }
   });
   return { status: 201, body: readVersion(db, id) };
@@ -223,6 +228,10 @@ export function approveDelivery(db: DatabaseSync, deliveryId: string, now: Date)
     }
     if (delivery.status !== "approved") {
       db.prepare("UPDATE deliveries SET status = 'approved', approved_at = ? WHERE id = ?").run(now.toISOString(), deliveryId);
+      db.prepare("INSERT INTO approval_events (delivery_id, event, at, version_id) VALUES (?, 'approved', ?, NULL)").run(
+        deliveryId,
+        now.toISOString(),
+      );
     }
     return { status: 200, body: readDelivery(db, deliveryId) };
   });
@@ -278,10 +287,16 @@ export function readDelivery(db: DatabaseSync, deliveryId: string) {
     id: delivery.id,
     campaign_id: delivery.campaign_id,
     status: delivery.status,
+    // Pagamento é derivado da aprovação: aprovar cedo demais é o que libera
+    // pagamento sem o que a marca comprou.
+    payment: delivery.status === "approved" ? "liberado" : "retido",
     required,
     pending: pendingRequired(required, current),
     // O motivo de cada pendência fica no GET; o 409 da aprovação mantém o corpo do contrato.
     pending_detail: describePending(required, current),
+    approval_history: db
+      .prepare("SELECT event, at, version_id FROM approval_events WHERE delivery_id = ? ORDER BY id ASC")
+      .all(deliveryId),
     pieces,
   };
 }
